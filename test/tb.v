@@ -1,49 +1,126 @@
 `default_nettype none
 `timescale 1ns / 1ps
 
-/* This testbench just instantiates the module and makes some convenient wires
-   that can be driven / tested by the cocotb test.py.
-*/
 module tb ();
 
-  // Dump the signals to a VCD file. You can view it with gtkwave or surfer.
-  initial begin
-    $dumpfile("tb.vcd");
-    $dumpvars(0, tb);
-    #1;
-  end
-
-  // Wire up the inputs and outputs:
   reg clk;
   reg rst_n;
-  reg ena;
-  reg [7:0] ui_in;
-  reg [7:0] uio_in;
+  reg data, str, ctrl, branch, fwrd, crct;
+
+  // Wires to DUT
+  wire [7:0] ui_in;
   wire [7:0] uo_out;
   wire [7:0] uio_out;
   wire [7:0] uio_oe;
-`ifdef GL_TEST
+
+  reg [7:0] uio_in;
+  reg ena;
   wire VPWR = 1'b1;
   wire VGND = 1'b0;
-`endif
 
-  // Replace tt_um_example with your module name:
-  tt_um_example user_project (
+  // Pack individual signals into ui_in (matching your RTL)
+  assign ui_in = {data, str, ctrl, branch, fwrd, crct, 1'b0, 1'b0};
 
-      // Include power ports for the Gate Level test:
+  // DUT instantiation
+  tt_um_fsm_haz user_project (
 `ifdef GL_TEST
-      .VPWR(VPWR),
-      .VGND(VGND),
+    .VPWR(VPWR),
+    .VGND(VGND),
 `endif
-
-      .ui_in  (ui_in),    // Dedicated inputs
-      .uo_out (uo_out),   // Dedicated outputs
-      .uio_in (uio_in),   // IOs: Input path
-      .uio_out(uio_out),  // IOs: Output path
-      .uio_oe (uio_oe),   // IOs: Enable path (active high: 0=input, 1=output)
-      .ena    (ena),      // enable - goes high when design is selected
-      .clk    (clk),      // clock
-      .rst_n  (rst_n)     // not reset
+    .ui_in  (ui_in),
+    .uo_out (uo_out),
+    .uio_in (uio_in),
+    .uio_out(uio_out),
+    .uio_oe (uio_oe),
+    .ena    (ena),
+    .clk    (clk),
+    .rst_n  (rst_n)   // active-low reset
   );
+
+  // Clock
+  initial begin
+    clk = 0;
+    forever #5 clk = ~clk;  // 10ns period
+  end
+
+  // VCD dump
+  initial begin
+    $dumpfile("tb.vcd");
+    $dumpvars(0, tb);
+  end
+  
+  // Stimulus sequence
+  initial begin
+    ena = 1;
+    uio_in = 8'h00;
+
+    $display("========Reset========");
+    data=0; str=0; ctrl=0; branch=0; fwrd=0; crct=0;
+    rst_n = 0; #20;
+    rst_n = 1;
+
+    $display("========Control hazard resolved CORRECTLY============");
+    #10; ctrl=1; branch=1; crct=1;
+    #10; ctrl=0; branch=0; crct=1;
+    #30;
+
+    $display("========Control hazard MIS-PREDICT (flush)===========");
+    #10; ctrl=1; branch=1; crct=0;
+    #20;
+
+    $display("========Control hazard delayed, mispredict later=======");
+    #10; ctrl=1; branch=0; crct=1;
+    #15; branch=1; crct=0;
+    #10; ctrl=0; branch=0; crct=1;
+    #30;
+
+    $display("========Control hazard delayed, correct predict later======");
+    #10; ctrl=1; branch=0; crct=1;
+    #15; branch=1; crct=1;
+    #10; ctrl=0; branch=0; crct=1;
+    #30;
+
+    $display("========Data hazard resolved by forwarding==========");
+    #10; data=1; fwrd=1;
+    #10; data=0; fwrd=0;
+    #30;
+
+    $display("========Data hazard multi-cycle stall then cleared=======");
+    #10; data=1; fwrd=0;
+    #40; data=0;
+    #30;
+
+    $display("======== Structural hazard (single/multi-cycle)==========");
+    #10; str=1;
+    #20; str=0;
+    #30;
+
+    $display("========Priority tests==========");
+    $display("======== a) ctrl + data =========");
+    #10; ctrl=1; data=1; fwrd=0; str=0; branch=0; crct=1;
+    #30; branch=1; crct=1;
+    #10; branch=0; crct=1; ctrl=0; data=1;
+    #20; data=0;
+
+    $display("======== b) ctrl + str ===========");
+    #20; ctrl=1; str=1; data=0; fwrd=0; branch=0; crct=1;
+    #25; branch=1; crct=0;
+    #10; branch=0; crct=1; ctrl=0; str=1;
+    #20; str=0;
+
+    $display("======== c) data + str ==========");
+    #20; data=1; str=1; fwrd=0; ctrl=0;
+    #30; data=0; str=0;
+    #30;
+
+    $display("======== 9) Preemption test: StaN interrupted by mispredict ===========");
+    #10; data=1; fwrd=0;
+    #15; ctrl=1; branch=1; crct=0;
+    #20;
+    #40;
+
+    $display("---- TEST COMPLETE ----");
+    $finish;
+  end
 
 endmodule
